@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+venv/
+.venv/
+
+# Secrets (keep the template)
+.env
+.env.*
+!.env.example
+
+# SEC response cache and local eval runs
+.cache/
+evals/results/
+
+.DS_Store
+.idea/
+.vscode/

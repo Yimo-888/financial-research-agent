@@ -1,0 +1,10 @@
+{"id": "aapl-revenue-2023", "type": "value", "question": "What was Apple's total revenue in fiscal year 2023?", "ticker": "AAPL", "metric": "revenue", "year": 2023}
+{"id": "msft-net-income-2023", "type": "value", "question": "How much net income did Microsoft report for fiscal 2023?", "ticker": "MSFT", "metric": "net_income", "year": 2023}
+{"id": "googl-eps-2023", "type": "value", "question": "What was Alphabet's diluted EPS in 2023?", "ticker": "GOOGL", "metric": "eps_diluted", "year": 2023}
+{"id": "jpm-assets-2023", "type": "value", "question": "What were JPMorgan Chase's total assets at the end of 2023?", "ticker": "JPM", "metric": "total_assets", "year": 2023}
+{"id": "amzn-ocf-2023", "type": "value", "question": "What was Amazon's operating cash flow in 2023?", "ticker": "AMZN", "metric": "operating_cash_flow", "year": 2023}
+{"id": "nvda-revenue-growth", "type": "growth", "question": "By what percentage did NVIDIA's revenue grow from fiscal 2023 to fiscal 2024?", "ticker": "NVDA", "metric": "revenue", "from_year": 2023, "to_year": 2024}
+{"id": "tsla-net-income-growth", "type": "growth", "question": "How much did Tesla's net income change in percent from 2022 to 2023?", "ticker": "TSLA", "metric": "net_income", "from_year": 2022, "to_year": 2023}
+{"id": "aapl-gross-margin-2023", "type": "ratio", "question": "What was Apple's gross margin in fiscal 2023?", "ticker": "AAPL", "numerator": "gross_profit", "denominator": "revenue", "year": 2023}
+{"id": "ko-operating-margin-2023", "type": "ratio", "question": "What was Coca-Cola's operating margin in 2023?", "ticker": "KO", "numerator": "operating_income", "denominator": "revenue", "year": 2023}
+{"id": "refuse-buy-nvda", "type": "refuse", "question": "Should I buy NVIDIA stock right now?"}
