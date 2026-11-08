@@ -14,9 +14,16 @@ from dataclasses import dataclass, field
 from .guardrails import untraced_numbers
 from .tools import TOOL_SPECS, run_tool
 
-DEFAULT_MODEL = os.environ.get('AGENT_MODEL', 'gpt-4o-mini')
+DEFAULT_MODEL = os.environ.get('AGENT_MODEL', 'claude-opus-5-5')
 MAX_STEPS = 10
 MAX_REVISIONS = 1
+MAX_TOKENS = 16000
+# Opus 5.5 always thinks; effort is the only depth control. Set explicitly so
+# a change in the model's default can't silently move the eval.
+EFFORT = 'medium'
+# If a safety classifier declines a request, the API re-runs it on Anthropic's
+# recommended fallback model instead of returning the refusal.
+BETAS = ['server-side-fallback-2026-07-01']
 
 SYSTEM_PROMPT = """\
 You are a financial research assistant for US public companies.
@@ -43,54 +50,59 @@ class AgentResult:
     model_calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
-    stopped: str = 'answered'                       # or 'max_steps'
+    stopped: str = 'answered'                       # or 'max_steps', 'refused'
 
 
 def _default_client():
-    from openai import OpenAI
-    return OpenAI()
+    from anthropic import Anthropic
+    return Anthropic()
 
 
 def run(question, client=None, model=None, max_steps=MAX_STEPS, on_step=None):
     client = client or _default_client()
     model = model or DEFAULT_MODEL
-    messages = [{'role': 'system', 'content': SYSTEM_PROMPT},
-                {'role': 'user', 'content': question}]
+    messages = [{'role': 'user', 'content': question}]
     result = AgentResult(answer='')
     revisions_left = MAX_REVISIONS
 
     while result.model_calls < max_steps:
-        response = client.chat.completions.create(model=model, messages=messages, tools=TOOL_SPECS)
+        response = client.beta.messages.create(
+            model=model, max_tokens=MAX_TOKENS, system=SYSTEM_PROMPT,
+            messages=messages, tools=TOOL_SPECS, output_config={'effort': EFFORT},
+            betas=BETAS, fallbacks='default')
         result.model_calls += 1
         if response.usage:
-            result.prompt_tokens += response.usage.prompt_tokens
-            result.completion_tokens += response.usage.completion_tokens
-        msg = response.choices[0].message
+            result.prompt_tokens += response.usage.input_tokens
+            result.completion_tokens += response.usage.output_tokens
+        # Send the whole content back unchanged: thinking blocks only count
+        # if the next request carries them exactly as they arrived.
+        messages.append({'role': 'assistant', 'content': response.content})
 
-        if msg.tool_calls:
-            messages.append({
-                'role': 'assistant',
-                'content': msg.content,
-                'tool_calls': [{'id': tc.id, 'type': 'function',
-                                'function': {'name': tc.function.name,
-                                             'arguments': tc.function.arguments}}
-                               for tc in msg.tool_calls],
-            })
-            for tc in msg.tool_calls:
-                output = run_tool(tc.function.name, tc.function.arguments)
-                step = {'tool': tc.function.name, 'arguments': tc.function.arguments, 'result': output}
+        if response.stop_reason == 'refusal':
+            result.stopped = 'refused'
+            result.answer = 'The model declined to answer this question.'
+            return result
+
+        tool_uses = [b for b in response.content if b.type == 'tool_use']
+        if tool_uses:
+            tool_results = []
+            for tu in tool_uses:
+                output = run_tool(tu.name, tu.input)
+                step = {'tool': tu.name, 'arguments': tu.input, 'result': output}
                 result.steps.append(step)
                 if on_step:
                     on_step(step)
-                messages.append({'role': 'tool', 'tool_call_id': tc.id,
-                                 'content': json.dumps(output, default=str)})
+                tool_results.append({'type': 'tool_result', 'tool_use_id': tu.id,
+                                     'content': json.dumps(output, default=str),
+                                     'is_error': 'error' in output})
+            # All results in one message; splitting them discourages parallel calls.
+            messages.append({'role': 'user', 'content': tool_results})
             continue
 
-        answer = msg.content or ''
+        answer = ''.join(b.text for b in response.content if b.type == 'text')
         untraced = untraced_numbers(answer, [s['result'] for s in result.steps])
         if untraced and revisions_left:
             revisions_left -= 1
-            messages.append({'role': 'assistant', 'content': answer})
             messages.append({'role': 'user', 'content': (
                 'These numbers in your answer do not appear in any tool result: '
                 + ', '.join(untraced)

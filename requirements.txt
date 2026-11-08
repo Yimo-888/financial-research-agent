@@ -1,4 +1,4 @@
-openai>=2.0
+anthropic>=2.6
 requests>=2.31
 python-dotenv>=1.0
 pytest>=8.0

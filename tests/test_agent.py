@@ -1,17 +1,22 @@
 """Agent loop tests with a scripted fake model — no network, no API key."""
-import json
 from types import SimpleNamespace as NS
 
 from finagent import agent, edgar
 
 
-def _tool_call(call_id, name, args):
-    return NS(id=call_id, function=NS(name=name, arguments=json.dumps(args)))
+def _tool_use(call_id, name, args):
+    return NS(type='tool_use', id=call_id, name=name, input=args)
 
 
-def _response(content=None, tool_calls=None):
-    msg = NS(content=content, tool_calls=tool_calls)
-    return NS(choices=[NS(message=msg)], usage=NS(prompt_tokens=10, completion_tokens=5))
+def _text(text):
+    return NS(type='text', text=text)
+
+
+def _response(*content, stop_reason=None):
+    if stop_reason is None:
+        stop_reason = 'tool_use' if any(b.type == 'tool_use' for b in content) else 'end_turn'
+    return NS(content=list(content), stop_reason=stop_reason,
+              usage=NS(input_tokens=10, output_tokens=5))
 
 
 class FakeClient:
@@ -20,10 +25,12 @@ class FakeClient:
     def __init__(self, script):
         self.script = list(script)
         self.sent = []
-        self.chat = NS(completions=NS(create=self._create))
+        self.params = None
+        self.beta = NS(messages=NS(create=self._create))
 
-    def _create(self, model, messages, tools):
+    def _create(self, messages, **params):
         self.sent.append([dict(m) for m in messages])
+        self.params = params
         return self.script.pop(0)
 
 
@@ -37,8 +44,8 @@ def _fake_financials(monkeypatch):
 def test_tool_call_then_answer(monkeypatch):
     _fake_financials(monkeypatch)
     client = FakeClient([
-        _response(tool_calls=[_tool_call('c1', 'get_financials', {'ticker': 'AAPL', 'metric': 'revenue'})]),
-        _response(content='Apple revenue in FY2023 was $383.3 billion.'),
+        _response(_tool_use('c1', 'get_financials', {'ticker': 'AAPL', 'metric': 'revenue'})),
+        _response(_text('Apple revenue in FY2023 was $383.3 billion.')),
     ])
     result = agent.run('Apple revenue 2023?', client=client, model='fake')
 
@@ -49,15 +56,29 @@ def test_tool_call_then_answer(monkeypatch):
     assert result.model_calls == 2 and result.prompt_tokens == 20
     # The tool result was fed back to the model under the right call id.
     tool_msg = client.sent[1][-1]
-    assert tool_msg['role'] == 'tool' and tool_msg['tool_call_id'] == 'c1'
+    assert tool_msg['role'] == 'user'
+    assert tool_msg['content'][0]['type'] == 'tool_result'
+    assert tool_msg['content'][0]['tool_use_id'] == 'c1'
+
+
+def test_assistant_content_is_sent_back_unchanged(monkeypatch):
+    # Thinking blocks must go back exactly as received, or the model loses them.
+    _fake_financials(monkeypatch)
+    turn = _response(NS(type='thinking', thinking='', signature='sig'),
+                     _tool_use('c1', 'get_financials', {'ticker': 'AAPL', 'metric': 'revenue'}))
+    client = FakeClient([turn, _response(_text('Revenue was $383.3 billion.'))])
+    agent.run('Apple revenue 2023?', client=client, model='fake')
+
+    assistant_msg = client.sent[1][-2]
+    assert assistant_msg == {'role': 'assistant', 'content': turn.content}
 
 
 def test_untraced_number_gets_one_revision(monkeypatch):
     _fake_financials(monkeypatch)
     client = FakeClient([
-        _response(tool_calls=[_tool_call('c1', 'get_financials', {'ticker': 'AAPL', 'metric': 'revenue'})]),
-        _response(content='Revenue was $383.3 billion, up 8% from last year.'),
-        _response(content='Revenue was $383.3 billion.'),
+        _response(_tool_use('c1', 'get_financials', {'ticker': 'AAPL', 'metric': 'revenue'})),
+        _response(_text('Revenue was $383.3 billion, up 8% from last year.')),
+        _response(_text('Revenue was $383.3 billion.')),
     ])
     result = agent.run('Apple revenue 2023?', client=client, model='fake')
 
@@ -70,8 +91,8 @@ def test_untraced_number_gets_one_revision(monkeypatch):
 def test_still_untraced_after_revision_is_reported(monkeypatch):
     _fake_financials(monkeypatch)
     client = FakeClient([
-        _response(content='Revenue was $500 billion.'),
-        _response(content='Revenue was $500 billion.'),
+        _response(_text('Revenue was $500 billion.')),
+        _response(_text('Revenue was $500 billion.')),
     ])
     result = agent.run('Apple revenue 2023?', client=client, model='fake')
     assert result.untraced == ['$500 billion']
@@ -79,15 +100,30 @@ def test_still_untraced_after_revision_is_reported(monkeypatch):
 
 def test_tool_errors_go_back_to_the_model():
     client = FakeClient([
-        _response(tool_calls=[_tool_call('c1', 'calculate', {'expression': '1 / 0'})]),
-        _response(content='I could not compute that.'),
+        _response(_tool_use('c1', 'calculate', {'expression': '1 / 0'})),
+        _response(_text('I could not compute that.')),
     ])
     result = agent.run('?', client=client, model='fake')
     assert result.steps[0]['result'] == {'error': 'division by zero'}
+    assert client.sent[1][-1]['content'][0]['is_error'] is True
+
+
+def test_refusal_is_reported():
+    client = FakeClient([_response(stop_reason='refusal')])
+    result = agent.run('?', client=client, model='fake')
+    assert result.stopped == 'refused'
+    assert result.model_calls == 1
+
+
+def test_requests_server_side_fallback():
+    client = FakeClient([_response(_text('Done.'))])
+    agent.run('?', client=client, model='fake')
+    assert client.params['fallbacks'] == 'default'
+    assert 'server-side-fallback-2026-07-01' in client.params['betas']
 
 
 def test_stops_at_max_steps():
-    loop = [_response(tool_calls=[_tool_call(f'c{i}', 'calculate', {'expression': '1 + 1'})]) for i in range(3)]
+    loop = [_response(_tool_use(f'c{i}', 'calculate', {'expression': '1 + 1'})) for i in range(3)]
     result = agent.run('?', client=FakeClient(loop), model='fake', max_steps=3)
     assert result.stopped == 'max_steps'
     assert len(result.steps) == 3

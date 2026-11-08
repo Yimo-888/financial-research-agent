@@ -38,7 +38,7 @@ Every change ships with tests, and `pytest` must pass before a task is done.
 - **Test the failure paths**, not just the happy path: bad input, missing data,
   tool errors, step limits.
 - **Bug fix = failing test first**, then the fix.
-- Tests that need the network or OpenAI must be marked `@pytest.mark.live`
+- Tests that need the network or the Claude API must be marked `@pytest.mark.live`
   and skipped by default (register the marker in a `pytest.ini` with
   `addopts = -m "not live"` when the first one is added).
 
@@ -61,32 +61,34 @@ evals/run_eval.py        computes ground truth, scores, writes evals/results/*.j
 tests/                   offline unit tests
 ```
 
-## Status (as of 2026-10-27)
+## Status (as of 2026-11-07)
 
 Done and verified:
-- All modules above; 23 offline tests pass.
+- All modules above; 32 offline tests pass. Model: Claude (`claude-opus-5-5`).
 - EDGAR extraction checked against live SEC data for AAPL, MSFT, NVDA, GOOGL,
   JPM, KO, TSLA, AMZN (values match published 10-Ks).
+- First real runs: full eval 10/10 (results in README). Refusals are graded by
+  a Claude judge (`JUDGE_MODEL` in `evals/run_eval.py`).
+- Git repo exists; remote `origin` = github.com/Yimo-888/financial-research-agent.
 
-Not yet done:
-- **The agent has never been run against a real model, and the eval has never
-  been run.** Needs `.env` (copy `.env.example`; set OPENAI_API_KEY and
-  SEC_USER_AGENT = "Name email").
-- README "Results" section is a placeholder; the example tool calls at the top
-  are illustrative and should be replaced with a real `-v` run.
-- No git repo yet. Intended home: GitHub account `Yimo-888`.
+Open issues found by the eval:
+- Guardrail flags formula constants in answers (the `100` in "… × 100").
+- After a revision round, the answer can mention the correction itself.
+- `AGENT_MODEL` from `.env` is ignored: `agent.py` reads it at import, before
+  `__main__.py` calls `load_dotenv()`.
 
 Known limitations (also in README): fiscal year = calendar year the period
 ends; revenue concept priority can pick a partial-revenue concept for a few
-companies; refusal scoring is keyword-based.
+companies; the refusal judge isn't validated against human labels.
 
 ## Next steps, in order
 
-1. Run one question with `-v`, then the full eval; fix what breaks (with tests).
-2. Record real results in README; replace the illustrative example.
-3. `git init`, first commit, push to GitHub.
+1. ~~Run one question with `-v`, then the full eval~~ (done); fix the open
+   issues above (with tests).
+2. ~~Record real results in README~~ (done).
+3. ~~Commit and push to GitHub~~ (done 2026-11-08; README has a Chinese section).
 4. Week 2: grow `questions.jsonl` to ~50 (add multi-company comparisons);
-   LLM-as-judge for refusals; ablations — with/without `calculate`,
+   ablations — with/without `calculate`,
    with/without the guardrail — reported as a table in README.
 5. Week 3: retrieval over 10-K text (risk factors, business description) with
    a local vector store (Chroma), measured against a no-retrieval baseline.

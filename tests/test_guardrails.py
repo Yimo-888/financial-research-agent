@@ -32,6 +32,18 @@ def test_rounding_passes_but_close_wrong_numbers_do_not():
     assert untraced_numbers('$390 billion', TOOLS) == ['$390 billion']
 
 
+def test_scaled_amount_traces_to_calculator_result_already_in_that_scale():
+    # calculate("(60922000000 - 26974000000) / 1000000000") returns 33.948.
+    tools = [{'expression': '(60922000000 - 26974000000) / 1000000000', 'result': 33.948}]
+    assert untraced_numbers('an increase of $33.948 billion', tools) == []
+
+
+def test_scaled_amount_does_not_trace_to_a_small_edgar_value():
+    # EDGAR values are always raw dollars, so "$6 billion" must not match EPS 5.8.
+    tools = [{'values': [{'fiscal_year': 2023, 'value': 5.8}]}]
+    assert untraced_numbers('$6 billion', tools) == ['$6 billion']
+
+
 def test_years_dates_urls_and_small_counts_are_ignored():
     text = ('Over the 3 years from 2021 to 2023 (period ended 2023-09-30), see '
             'https://www.sec.gov/Archives/edgar/data/320193/000032019323000106/ and Form 10-K.')

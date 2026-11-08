@@ -51,6 +51,7 @@ def extract_numbers(text):
             'value': sign * num * scale,
             'tolerance': half_step * scale,
             'percent': percent,
+            'scale': scale,
         })
     return found
 
@@ -92,8 +93,19 @@ def mentions_value(answer, expected):
     return any(_matches(c, [expected]) for c in extract_numbers(answer))
 
 
+def _unscaled(claim):
+    # "$33.9 billion" from calculate("(a - b) / 1000000000") = 33.948: the
+    # model already divided by the scale it then wrote out in words.
+    return {**claim, 'value': claim['value'] / claim['scale'],
+            'tolerance': claim['tolerance'] / claim['scale']}
+
+
 def untraced_numbers(answer, tool_results):
     known = []
     for result in tool_results:
         collect_tool_numbers(result, known)
-    return [c['text'] for c in extract_numbers(answer) if not _matches(c, known)]
+    # Only calculator results can be pre-scaled; EDGAR values are raw dollars.
+    calculated = [r['result'] for r in tool_results if 'expression' in r and 'result' in r]
+    return [c['text'] for c in extract_numbers(answer)
+            if not _matches(c, known)
+            and not (c['scale'] != 1 and _matches(_unscaled(c), calculated))]

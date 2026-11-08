@@ -5,6 +5,7 @@ Ask the agent one question from the command line:
     python -m finagent -v "..."        # also print every tool call
 """
 import argparse
+import json
 
 from dotenv import load_dotenv
 
@@ -20,7 +21,7 @@ def main():
     args = parser.parse_args()
 
     def show(step):
-        print(f'  → {step["tool"]}({step["arguments"]})')
+        print(f'  → {step["tool"]}({json.dumps(step["arguments"])})')
         if 'error' in step['result']:
             print(f'    ! {step["result"]["error"]}')
 
