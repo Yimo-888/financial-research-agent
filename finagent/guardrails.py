@@ -21,6 +21,7 @@ REL_TOLERANCE = 0.005
 
 _ISO_DATE = re.compile(r'\b\d{4}-\d{2}-\d{2}\b')
 _URL = re.compile(r'https?://\S+')
+_CONSTANT = re.compile(r'\d+(?:\.\d+)?')
 _NUMBER = re.compile(
     r'(?<![\w.])(?P<sign>[-−])?(?P<dollar>\$)?'
     r'(?P<int>\d{1,3}(?:,\d{3})+|\d+)(?P<dec>\.\d+)?'
@@ -32,9 +33,11 @@ _NUMBER = re.compile(
 
 def extract_numbers(text):
     """Numbers in `text` worth checking, as dicts with raw-scale `value`,
-    `tolerance` and the original `text`. Skips dates, URLs, years and small
-    bare counts ("3 years", "2 companies")."""
-    text = _URL.sub(' ', _ISO_DATE.sub(' ', text))
+    `tolerance`, the original `text` and where it `start`s and `end`s. Skips
+    dates, URLs, years and small bare counts ("3 years", "2 companies")."""
+    # Blank out with equal-length spaces so positions still refer to `text`.
+    for pattern in (_ISO_DATE, _URL):
+        text = pattern.sub(lambda m: ' ' * len(m[0]), text)
     found = []
     for m in _NUMBER.finditer(text):
         unit = (m['word'] or m['sym'] or '').lower()
@@ -48,10 +51,13 @@ def extract_numbers(text):
         half_step = 0.5 * 10 ** -(len(decimals) - 1 if decimals else 0)
         found.append({
             'text': m.group(0).strip(),
+            'start': m.start(),
+            'end': m.end(),
             'value': sign * num * scale,
             'tolerance': half_step * scale,
             'percent': percent,
             'scale': scale,
+            'bare': not (m['dollar'] or unit),
         })
     return found
 
@@ -100,12 +106,47 @@ def _unscaled(claim):
             'tolerance': claim['tolerance'] / claim['scale']}
 
 
-def untraced_numbers(answer, tool_results):
-    known = []
-    for result in tool_results:
-        collect_tool_numbers(result, known)
+def _from_calculation(claim, result):
+    """Ways a claim can come from one calculate result besides equalling it."""
+    if 'expression' not in result or 'result' not in result:
+        return False
     # Only calculator results can be pre-scaled; EDGAR values are raw dollars.
-    calculated = [r['result'] for r in tool_results if 'expression' in r and 'result' in r]
-    return [c['text'] for c in extract_numbers(answer)
-            if not _matches(c, known)
-            and not (c['scale'] != 1 and _matches(_unscaled(c), calculated))]
+    if claim['scale'] != 1 and _matches(_unscaled(claim), [result['result']]):
+        return True
+    # A formula written out in the answer ("… × 100") repeats constants the
+    # model typed into the calculator. Bare numbers only: "$100 billion" is a
+    # financial claim and must match a value.
+    constants = [float(n) for n in _CONSTANT.findall(result['expression'].replace(',', ''))]
+    return claim['bare'] and claim['value'] in constants
+
+
+def _source_ids(obj, out=None):
+    """Digit runs in every `source` link inside a tool result: the company's
+    SEC number and the filing's accession number. An answer may repeat them."""
+    out = set() if out is None else out
+    if isinstance(obj, dict):
+        if isinstance(obj.get('source'), str):
+            out.update(float(n) for n in re.findall(r'\d+', obj['source']))
+        obj = list(obj.values())
+    if isinstance(obj, (list, tuple)):
+        for item in obj:
+            _source_ids(item, out)
+    return out
+
+
+def trace_numbers(answer, tool_results):
+    """Every checked number as {text, start, end, source}; `source` is the
+    index of the first tool result it traces to, or None."""
+    traced = []
+    for claim in extract_numbers(answer):
+        source = next((i for i, result in enumerate(tool_results)
+                       if _matches(claim, collect_tool_numbers(result))
+                       or _from_calculation(claim, result)
+                       or (claim['bare'] and claim['value'] in _source_ids(result))), None)
+        traced.append({'text': claim['text'], 'start': claim['start'], 'end': claim['end'],
+                       'source': source})
+    return traced
+
+
+def untraced_numbers(answer, tool_results):
+    return [n['text'] for n in trace_numbers(answer, tool_results) if n['source'] is None]

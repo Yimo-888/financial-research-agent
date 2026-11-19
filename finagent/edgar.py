@@ -60,11 +60,8 @@ class EdgarError(Exception):
 _last_request = 0.0
 
 
-def _get_json(url, cache_name):
-    cached = CACHE_DIR / cache_name
-    if cached.exists():
-        return json.loads(cached.read_text())
-
+def fetch(url):
+    """One rate-limited GET to the SEC; the caller decides what to cache."""
     agent = os.environ.get('SEC_USER_AGENT')
     if not agent:
         raise EdgarError('SEC_USER_AGENT is not set (e.g. "Your Name you@example.com")')
@@ -73,13 +70,19 @@ def _get_json(url, cache_name):
     wait = MIN_REQUEST_GAP - (time.monotonic() - _last_request)
     if wait > 0:
         time.sleep(wait)
-    resp = requests.get(url, headers={'User-Agent': agent}, timeout=30)
+    resp = requests.get(url, headers={'User-Agent': agent}, timeout=60)
     _last_request = time.monotonic()
     if resp.status_code == 404:
         raise EdgarError(f'not found: {url}')
     resp.raise_for_status()
+    return resp
 
-    data = resp.json()
+
+def _get_json(url, cache_name):
+    cached = CACHE_DIR / cache_name
+    if cached.exists():
+        return json.loads(cached.read_text())
+    data = fetch(url).json()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     cached.write_text(json.dumps(data))
     return data
